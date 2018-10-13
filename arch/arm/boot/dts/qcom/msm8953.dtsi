@@ -126,6 +126,12 @@
 			alignment = <0 0x400000>;
 			size = <0 0x800000>;
 		};
+
+		ramoops_mem: ramoops_region@92900000 {
+			compatible = "removed-dma-pool";
+			no-map;
+			reg = <0x0 0x92900000 0x0 0x00100000>;
+		};
 	};
 
 	aliases {
@@ -2349,6 +2355,20 @@
 		compatible = "qcom,android-usb";
 		reg = <0x086000c8 0xc8>;
 		qcom,pm-qos-latency = <2 213 11028>;
+	};
+
+	ramoops {
+		compatible = "ramoops";
+		status = "ok";
+
+		android,ramoops-buffer-start = <0x92900000>;
+		android,ramoops-buffer-size = <0x00100000>;
+		android,ramoops-console-size = <0x00080000>;
+		android,ramoops-pmsg-size = <0x00040000>;
+		android,ramoops-record-size = <0x00008000>;
+		android,ramoops-ftrace-size = <0x00020000>;
+		android,ramoops-dump-oops = <0x1>;
+		linux,contiguous-region = <&ramoops_mem>;
 	};
 };
 
