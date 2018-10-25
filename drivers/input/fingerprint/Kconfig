@@ -2,7 +2,10 @@ config INPUT_FINGERPRINT
 	tristate "Fingerprint driver support"
 	help
 	  Say Y here to enable goodix fingerprint driver support!
+
 source "drivers/input/fingerprint/goodix_mido/Kconfig"
 source "drivers/input/fingerprint/fpc_mido/Kconfig"
 source "drivers/input/fingerprint/goodix_tissot/Kconfig"
 source "drivers/input/fingerprint/fpc_tissot/Kconfig"
+source "drivers/input/fingerprint/goodix_daisy/Kconfig"
+source "drivers/input/fingerprint/fpc_daisy/Kconfig"
