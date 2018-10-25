@@ -12,12 +12,24 @@ config MACH_XIAOMI_MIDO
         bool "Mido board"
         select MACH_XIAOMI_MSM8953
         help
-          Support for Xiaomi Redmi note 3
+          Support for Xiaomi Redmi note 4
 
 config MACH_XIAOMI_TISSOT
 	bool "Tissot board"
 	select MACH_XIAOMI_MSM8953
 	help
-	  Support for Xiomi MI A1 tissot
+	  Support for Xiaomi MI A1 tissot
+
+config MACH_XIAOMI_DAISY
+	bool "Sakura / Daisy board"
+	select MACH_XIAOMI_MSM8953
+	help
+	  Support for Xiaomi Mi A2 Lite/RedMi6 pro
+
+config MACH_XIAOMI_VINCE
+	bool "Vince / e7 board"
+	select MACH_XIAOMI_MSM8953
+	help
+	  Support for Xiaomi Redmi 5 plus
 
 endmenu
