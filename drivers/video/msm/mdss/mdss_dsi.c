@@ -1,4 +1,5 @@
 /* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2018 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -34,6 +35,10 @@
 #include "mdss_dsi_phy.h"
 #include "mdss_dba_utils.h"
 
+#ifdef CONFIG_HQ_SYSFS_SUPPORT
+#include <linux/hqsysfs.h>
+#include <linux/delay.h>
+#endif
 #define XO_CLK_RATE	19200000
 #define CMDLINE_DSI_CTL_NUM_STRING_LEN 2
 
@@ -42,6 +47,26 @@ static struct mdss_dsi_data *mdss_dsi_res;
 
 #define DSI_DISABLE_PC_LATENCY 100
 #define DSI_ENABLE_PC_LATENCY PM_QOS_DEFAULT_VALUE
+
+#ifdef CONFIG_ENABLE_PM_TP_SUSPEND_RESUME
+/*A flag to indicate ffbm mode or not*/
+bool lcm_ffbm_mode = 0;
+#endif
+
+/*Only used in D2*/
+
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+static struct NVT_CSOT_ESD nvt_csot_esd = {
+	.nova_csot_panel = false,
+	.ESD_TE_status = false
+};
+
+struct NVT_CSOT_ESD*get_nvt_csot_esd_status(void){
+	return &nvt_csot_esd;
+}
+
+bool vspn_power_state = false;		/*only used in vince*/
+#endif
 
 static struct pm_qos_request mdss_dsi_pm_qos_request;
 
@@ -282,10 +307,98 @@ extern int ft8716_suspend;
 extern int  ft8716_gesture_func_on;
 int acc_vreg = 0;
 #endif
-int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
+
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+static int nova_esd_2fingers_rst(struct mdss_panel_data *pdata) {
+	int ret = 0;
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+
+	if (pdata == NULL) {
+		pr_err("%s: Invalid input data\n", __func__);
+		ret = -EINVAL;
+		goto end;
+	}
+
+	printk("[zmc] %s\n",__func__);
+
+	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+				panel_data);
+
+	if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
+		pr_debug("reset enable: pinctrl not enabled\n");
+	ret = mdss_dsi_panel_reset(pdata, 1);
+	if (ret)
+		pr_err("%s: Panel reset failed. rc=%d\n",
+				__func__, ret);
+
+	ret = mdss_dsi_panel_reset(pdata, 0);
+
+	msleep(30);
+
+	if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
+		pr_debug("reset enable: pinctrl not enabled\n");
+	ret = mdss_dsi_panel_reset(pdata, 1);
+	if (ret)
+		pr_err("%s: Panel reset failed. rc=%d\n",
+				__func__, ret);
+
+		ret = mdss_dsi_panel_reset(pdata, 0);
+end:
+	return ret;
+}
+
+static int nova_esd_recovery(struct mdss_panel_data *pdata) {
+	int ret = 0;
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+	struct NVT_CSOT_ESD *nvt_csot_esd_status = get_nvt_csot_esd_status();
+
+	if (nvt_csot_esd_status->ESD_TE_status) {
+		if (pdata == NULL) {
+			pr_err("%s: Invalid input data\n", __func__);
+			ret = -EINVAL;
+			goto end;
+		}
+
+		ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+					panel_data);
+
+		printk("[zmc] %s: vspn_power_state = %d\n",__func__,vspn_power_state);
+
+		ret = msm_dss_enable_vreg(
+					ctrl_pdata->panel_power_data.vreg_config,
+					ctrl_pdata->panel_power_data.num_vreg, 0);
+			if (ret)
+				pr_err("%s: failed to disable vregs for %s\n",
+					__func__, __mdss_dsi_pm_name(DSI_PANEL_PM));
+
+		vspn_power_state = false;
+
+		printk("[zmc] nova_csot_panel delay 1000ms");
+
+		msleep(50);
+		ret = nova_esd_2fingers_rst(pdata);
+
+		msleep(500);
+
+		ret = nova_esd_2fingers_rst(pdata);
+		msleep(10);
+
+		nvt_csot_esd_status->ESD_TE_status = false;
+	}
+
+end:
+	return ret;
+}
+#endif
+
+ int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
+
 {
 	int ret = 0;
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+	struct NVT_CSOT_ESD *nvt_csot_esd_status = get_nvt_csot_esd_status();
+#endif
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -302,6 +415,8 @@ int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 		ret = 0;
 	}
 
+	usleep_range(1000,1000);
+
 	if (mdss_dsi_pinctrl_set_state(ctrl_pdata, false))
 		pr_debug("reset disable: pinctrl not enabled\n");
 
@@ -316,7 +431,30 @@ int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 #ifdef CONFIG_MACH_XIAOMI_TISSOT
 	if ((panel_suspend_power_flag != 3) && acc_vreg) {
 #endif
-		ret = msm_dss_enable_vreg(
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+	if ((!synaptics_gesture_func_on) || (!synaptics_gesture_func_on_lansi) || (!NVT_gesture_func_on)) {
+		if (nvt_csot_esd_status->nova_csot_panel&&nvt_csot_esd_status->ESD_TE_status) {
+			ret = nova_esd_recovery(pdata);
+		} else{
+			printk("[zmc] %s: vspn_power_state = %d\n",__func__,vspn_power_state);
+			if (vspn_power_state) {
+				ret = msm_dss_enable_vreg(
+				ctrl_pdata->panel_power_data.vreg_config,
+				ctrl_pdata->panel_power_data.num_vreg, 0);
+				if (ret)
+					pr_err("%s: failed to disable vregs for %s\n",
+						__func__, __mdss_dsi_pm_name(DSI_PANEL_PM));
+				vspn_power_state = false;
+			}
+		}
+	} else if (nvt_csot_esd_status->nova_csot_panel&&nvt_csot_esd_status->ESD_TE_status) {
+		ret = nova_esd_recovery(pdata);
+	}
+	else{
+		printk("[zmc] %s: VSP/VSN keep high for gesture_wakeup\n",__func__);
+	}
+#else
+ 	ret = msm_dss_enable_vreg(
 		ctrl_pdata->panel_power_data.vreg_config,
 		ctrl_pdata->panel_power_data.num_vreg, 0);
 #ifdef CONFIG_MACH_XIAOMI_TISSOT
@@ -358,9 +496,15 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 #ifdef CONFIG_MACH_XIAOMI_TISSOT
 	if (!acc_vreg) {
 #endif
+
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+	printk("[zmc] %s: vspn_power_state = %d\n",__func__,vspn_power_state);
+	if (!vspn_power_state) {
+#endif
 		ret = msm_dss_enable_vreg(
-		ctrl_pdata->panel_power_data.vreg_config,
-		ctrl_pdata->panel_power_data.num_vreg, 1);
+			ctrl_pdata->panel_power_data.vreg_config,
+			ctrl_pdata->panel_power_data.num_vreg, 1);
+
 #ifdef CONFIG_MACH_XIAOMI_TISSOT
 		acc_vreg++;
 #endif
@@ -370,6 +514,11 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 			return ret;
 		}
 #ifdef CONFIG_MACH_XIAOMI_TISSOT
+	}
+
+#endif
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+		vspn_power_state = true;
 	}
 #endif
 
@@ -1678,6 +1827,10 @@ static int mdss_dsi_unblank(struct mdss_panel_data *pdata)
 	if ((pdata->panel_info.type == MIPI_CMD_PANEL) &&
 		mipi->vsync_enable && mipi->hw_vsync_mode) {
 		mdss_dsi_set_tear_on(ctrl_pdata);
+#if (defined CONFIG_MACH_XIAOMI_DAISY) || (defined CONFIG_MACH_XIAOMI_VINCE)
+		if (mdss_dsi_is_te_based_esd(ctrl_pdata))
+			enable_irq(gpio_to_irq(ctrl_pdata->disp_te_gpio));
+#endif
 	}
 
 	ctrl_pdata->ctrl_state |= CTRL_STATE_PANEL_INIT;
@@ -1747,6 +1900,13 @@ static int mdss_dsi_blank(struct mdss_panel_data *pdata, int power_state)
 
 	if ((pdata->panel_info.type == MIPI_CMD_PANEL) &&
 		mipi->vsync_enable && mipi->hw_vsync_mode) {
+#if (defined CONFIG_MACH_XIAOMI_DAISY) || (defined CONFIG_MACH_XIAOMI_VINCE)
+		if (mdss_dsi_is_te_based_esd(ctrl_pdata)) {
+				disable_irq(gpio_to_irq(
+					ctrl_pdata->disp_te_gpio));
+				atomic_dec(&ctrl_pdata->te_irq_ready);
+		}
+#endif
 		mdss_dsi_set_tear_off(ctrl_pdata);
 	}
 
@@ -2692,8 +2852,10 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 							pdata);
 		break;
 	case MDSS_EVENT_UNBLANK:
+		pr_err("lcd-time event unblank begin\n");
 		if (ctrl_pdata->on_cmds.link_state == DSI_LP_MODE)
 			rc = mdss_dsi_unblank(pdata);
+		pr_err("lcd-time event unblank end\n");
 		break;
 	case MDSS_EVENT_POST_PANEL_ON:
 		rc = mdss_dsi_post_panel_on(pdata);
@@ -2705,9 +2867,11 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		pdata->panel_info.esd_rdy = true;
 		break;
 	case MDSS_EVENT_BLANK:
+		pr_err("lcd-time event blank begin\n");
 		power_state = (int) (unsigned long) arg;
 		if (ctrl_pdata->off_cmds.link_state == DSI_HS_MODE)
 			rc = mdss_dsi_blank(pdata, power_state);
+		pr_err("lcd-time event blank end\n");
 		break;
 	case MDSS_EVENT_PANEL_OFF:
 		power_state = (int) (unsigned long) arg;
@@ -2870,18 +3034,39 @@ static struct device_node *mdss_dsi_pref_prim_panel(
  *
  * returns pointer to panel node on success, NULL on error.
  */
+char panel_name[MDSS_MAX_PANEL_LEN] = "";
+#ifdef CONFIG_WPONIT_ADJUST_FUN
+u32 white_point_num_x = 0;
+u32 white_point_num_y = 0;
+u32 white_point_num_r = 0;
+u32 white_point_num_g = 0;
+u32 white_point_num_b = 0;
+#endif
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+int white_point_num = 0;
+extern uint32_t ESD_interval;		/*ESD check period*/
+#endif
 static struct device_node *mdss_dsi_find_panel_of_node(
 		struct platform_device *pdev, char *panel_cfg)
 {
 	int len, i = 0;
 	int ctrl_id = pdev->id - 1;
-	char panel_name[MDSS_MAX_PANEL_LEN] = "";
+
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+	char *wponit_str;
+#endif
 	char ctrl_id_stream[3] =  "0:";
 	char *str1 = NULL, *str2 = NULL, *override_cfg = NULL;
 	char cfg_np_name[MDSS_MAX_PANEL_LEN] = "";
+#ifdef CONFIG_WPONIT_ADJUST_FUN
+	char *wponit_str;
+#endif
 	struct device_node *dsi_pan_node = NULL, *mdss_node = NULL;
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = platform_get_drvdata(pdev);
 	struct mdss_panel_info *pinfo = &ctrl_pdata->panel_data.panel_info;
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+	struct NVT_CSOT_ESD *nvt_csot_esd_status = get_nvt_csot_esd_status();
+#endif
 
 	len = strlen(panel_cfg);
 	ctrl_pdata->panel_data.dsc_cfg_np_name[0] = '\0';
@@ -2891,6 +3076,36 @@ static struct device_node *mdss_dsi_find_panel_of_node(
 			 __func__, __LINE__);
 		goto end;
 	} else {
+#ifdef CONFIG_ENABLE_PM_TP_SUSPEND_RESUME
+		lcm_ffbm_mode = strnstr(panel_cfg, "ffbm", len);
+		if (lcm_ffbm_mode) {
+			pr_info("[ffbm] we are in ffbm mode now!\n");
+		}
+#endif
+
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+		wponit_str = strnstr(panel_cfg, ":wpoint=", len);
+		if (!wponit_str) {
+			pr_err("%s:[white point calibration] white point is not present in %s\n",
+					__func__, panel_cfg);
+		} else{
+			white_point_num = ((*(wponit_str +  8)) - '0') * 10 + ((*(wponit_str +  9) - '0'));
+			pr_err("[white point calibration] white_point_num = %d\n", white_point_num);
+		}
+#endif
+
+#ifdef CONFIG_WPONIT_ADJUST_FUN
+		wponit_str = strnstr(panel_cfg, ":wpoint=", len);
+		if (!wponit_str) {
+			pr_err("%s:[white point calibration] white point is not present in %s\n",
+					__func__, panel_cfg);
+		} else{
+			white_point_num_x = ((*(wponit_str +  8)) - '0') * 100 + ((*(wponit_str +  9) - '0'))*10 +(*(wponit_str +  10) - '0');
+			white_point_num_y = ((*(wponit_str +  11)) - '0') * 100 + ((*(wponit_str +  12) - '0'))*10 +(*(wponit_str +  13) - '0');
+			pr_err("[white point calibration] white_point_num_x = %d,white_point_num_y = %d\n", white_point_num_x,white_point_num_y);
+		}
+#endif
+
 		/* check if any override parameters are set */
 		pinfo->sim_panel_mode = 0;
 		override_cfg = strnstr(panel_cfg, "#" OVERRIDE_CFG, len);
@@ -2934,10 +3149,48 @@ static struct device_node *mdss_dsi_find_panel_of_node(
 				panel_name[i] = *(str1 + i);
 			panel_name[i] = 0;
 		}
-		pr_info("%s: cmdline:%s panel_name:%s\n",
+		pr_err("%s: cmdline:%s panel_name:%s\n",
 			__func__, panel_cfg, panel_name);
 		if (!strcmp(panel_name, NONE_PANEL))
 			goto exit;
+#ifdef CONFIG_MACH_XIAOMI_VINCE
+		if (!strcmp(panel_name, "qcom,mdss_dsi_td4310_fhdplus_video_e7")) {
+			hq_regiser_hw_info(HWID_LCM,"incell,vendor:Tianma,IC:TD4310(synaptics)");
+		} else if (!strcmp(panel_name, "qcom,mdss_dsi_td4310_fhdplus_video_e7_g55")) {
+			hq_regiser_hw_info(HWID_LCM,"incell,vendor:Tianma_G55,IC:TD4310(synaptics)");
+		} else if (!strcmp(panel_name, "qcom,mdss_dsi_td4310_ebbg_fhdplus_video_e7")) {
+			hq_regiser_hw_info(HWID_LCM,"incell,vendor:EBBG,IC:TD4310(synaptics)");
+		} else if (!strcmp(panel_name, "qcom,mdss_dsi_nt36672_tianma_fhdplus_video_e7")) {
+			hq_regiser_hw_info(HWID_LCM,"incell,vendor:Tianma,IC:NT36672(novatek)");
+		} else if (!strcmp(panel_name, "qcom,mdss_dsi_nt36672_csot_fhdplus_video_e7")) {
+			nvt_csot_esd_status->nova_csot_panel = true;
+			ESD_interval = 500;
+			hq_regiser_hw_info(HWID_LCM,"incell,vendor:CSOT,IC:NT36672(novatek)");
+		}
+#endif
+#if (defined CONFIG_MACH_XIAOMI_DAISY) || (defined CONFIG_MACH_XIAOMI_VINCE)
+		if (!strcmp(panel_name, "qcom,mdss_dsi_otm1911_fhdplus_video")) {
+			hq_regiser_hw_info(HWID_LCM,"oncell,vendor:Skh,IC:atm007");
+		} else if (!strcmp(panel_name, "qcom,mdss_dsi_ili7807_fhdplus_video")) {
+			hq_regiser_hw_info(HWID_LCM,"oncell,vendor:bird,IC:lol898");
+#endif
+#ifdef CONFIG_WPONIT_ADJUST_FUN
+			white_point_num_r = 653332;
+			white_point_num_g = 291664;
+			white_point_num_b = 154054;
+#endif
+#if (defined CONFIG_MACH_XIAOMI_DAISY) || (defined CONFIG_MACH_XIAOMI_VINCE)
+		} else if (!strcmp(panel_name, "qcom,mdss_dsi_hx8399c_fhdplus_video")) {
+			hq_regiser_hw_info(HWID_LCM,"oncell,vendor:csot,IC:hx8399c");
+#endif
+#ifdef CONFIG_WPONIT_ADJUST_FUN
+			white_point_num_r = 656333;
+			white_point_num_g = 288654;
+			white_point_num_b = 146057;
+#endif
+#if (defined CONFIG_MACH_XIAOMI_DAISY) || (defined CONFIG_MACH_XIAOMI_VINCE)
+		}
+#endif
 
 #if (defined CONFIG_MACH_XIAOMI_MIDO) || (defined CONFIG_MACH_XIAOMI_TISSOT)
 		if (!strcmp(panel_name, "qcom,mdss_dsi_td4310_fhd_video")) {
@@ -4147,8 +4400,8 @@ static int mdss_dsi_parse_ctrl_params(struct platform_device *ctrl_pdev,
 
 }
 
-#ifdef CONFIG_MACH_XIAOMI_MIDO
-u32 te_count;
+#if (defined CONFIG_MACH_XIAOMI_MIDO) || (defined CONFIG_MACH_XIAOMI_DAISY) || (defined CONFIG_MACH_XIAOMI_VINCE)
+u32 te_count = 60;			/*TE counter*/
 static irqreturn_t te_interrupt(int irq, void *data)
 {
 	disable_irq_nosync(irq);
@@ -4190,7 +4443,6 @@ int init_te_irq(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 		return 0;
 }
 #endif
-
 static int mdss_dsi_parse_gpio_params(struct platform_device *ctrl_pdev,
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
@@ -4356,7 +4608,7 @@ int dsi_panel_device_register(struct platform_device *ctrl_pdev,
 		ctrl_pdata->check_status = mdss_dsi_reg_status_check;
 	else if (ctrl_pdata->status_mode == ESD_BTA)
 		ctrl_pdata->check_status = mdss_dsi_bta_status_check;
-#ifdef CONFIG_MACH_XIAOMI_MIDO
+#if (defined CONFIG_MACH_XIAOMI_MIDO) || (defined CONFIG_MACH_XIAOMI_DAISY) || (defined CONFIG_MACH_XIAOMI_VINCE)
 	else if (ctrl_pdata->status_mode == ESD_TE_NT35596) {
 		ctrl_pdata->check_status = mdss_dsi_TE_NT35596_check;
 		init_te_irq(ctrl_pdata);
