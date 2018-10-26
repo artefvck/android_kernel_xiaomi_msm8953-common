@@ -1,4 +1,5 @@
 /* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2018 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -2707,7 +2708,7 @@ static struct snd_soc_dai_driver msm_fe_dais[] = {
 		.name = "MultiMedia29",
 		.probe = fe_dai_probe,
 	},
-#ifdef CONFIG_SND_SOC_MAX98927
+#if (defined CONFIG_SND_SOC_MAX98927) || (defined CONFIG_SND_SOC_TAS2557)
 	{
 		.capture = {
 			.stream_name = "Quinary MI2S_TX Hostless Capture",
