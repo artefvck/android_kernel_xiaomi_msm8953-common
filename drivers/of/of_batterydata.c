@@ -1,4 +1,5 @@
 /* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2018 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -310,13 +311,18 @@ static int64_t of_batterydata_convert_battery_id_kohm(int batt_id_uv,
 	return resistor_value_kohm;
 }
 
+#if (defined CONFIG_MACH_XIAOMI_DAISY) || (defined CONFIG_MACH_XIAOMI_VINCE)
+#define	Desay_24Kohm	24
+#define	FMT_200_41Kohm		200
+#define	GY_50Kohm		50
+#endif
 struct device_node *of_batterydata_get_best_profile(
 		const struct device_node *batterydata_container_node,
 		const char *psy_name,  const char  *batt_type)
 {
 	struct batt_ids batt_ids;
 	struct device_node *node, *best_node = NULL;
-#if (defined CONFIG_MACH_XIAOMI_MIDO) || (defined CONFIG_MACH_XIAOMI_TISSOT)
+#if (defined CONFIG_MACH_XIAOMI_MSM8953)
 	struct device_node *default_node = NULL;
 #endif
 	struct power_supply *psy;
@@ -325,7 +331,7 @@ struct device_node *of_batterydata_get_best_profile(
 	int delta = 0, best_delta = 0, best_id_kohm = 0, id_range_pct,
 		batt_id_kohm = 0, i = 0, rc = 0, limit = 0;
 	bool in_range = false;
-#if (defined CONFIG_MACH_XIAOMI_MIDO) || (defined CONFIG_MACH_XIAOMI_TISSOT)
+#if (defined CONFIG_MACH_XIAOMI_MSM8953)
 	int checknum = 0, match = 0;
 #endif
 
@@ -377,8 +383,14 @@ struct device_node *of_batterydata_get_best_profile(
 			for (i = 0; i < batt_ids.num; i++) {
 				delta = abs(batt_ids.kohm[i] - batt_id_kohm);
 				limit = (batt_ids.kohm[i] * id_range_pct) / 100;
+#if (defined CONFIG_MACH_XIAOMI_DAISY) || (defined CONFIG_MACH_XIAOMI_VINCE)
+				if (batt_ids.kohm[i] == Desay_24Kohm) {
+					limit++;
+					pr_err("Desay_limit=%dKohm.\n", limit);
+				}
+#endif
 				in_range = (delta <= limit);
-#if (defined CONFIG_MACH_XIAOMI_MIDO) || (defined CONFIG_MACH_XIAOMI_TISSOT)
+#if (defined CONFIG_MACH_XIAOMI_MSM8953)
 				if (in_range != 0)
 					match = 1;
 #endif
@@ -395,6 +407,15 @@ struct device_node *of_batterydata_get_best_profile(
 				if (batt_ids.kohm[i] == 50)
 					default_node = node;
 #endif
+#if (defined CONFIG_MACH_XIAOMI_DAISY) || (defined CONFIG_MACH_XIAOMI_VINCE)
+				if (batt_ids.kohm[i] == FMT_200_41Kohm) {
+					pr_err("Default_node:FMT_41Kohm.\n");
+					default_node = node;
+				} else if (batt_ids.kohm[i] == GY_50Kohm) {
+					pr_err("Default_node:GY_50Kohm.\n");
+					default_node = node;
+				}
+#endif
 				if ((delta < best_delta || !best_node)
 					&& in_range) {
 					best_node = node;
@@ -405,7 +426,7 @@ struct device_node *of_batterydata_get_best_profile(
 		}
 	}
 
-#if (defined CONFIG_MACH_XIAOMI_MIDO) || (defined CONFIG_MACH_XIAOMI_TISSOT)
+#if (defined CONFIG_MACH_XIAOMI_MSM8953)
 	checknum = abs(best_id_kohm - batt_id_kohm);
 	if (match == 0) {
 		best_node = default_node;
@@ -418,7 +439,7 @@ struct device_node *of_batterydata_get_best_profile(
 	}
 
 	/* check that profile id is in range of the measured batt_id */
-#if (defined CONFIG_MACH_XIAOMI_MIDO) || (defined CONFIG_MACH_XIAOMI_TISSOT)
+#if (defined CONFIG_MACH_XIAOMI_MSM8953)
 	if (checknum >
 #else
 	if (abs(best_id_kohm - batt_id_kohm) >
